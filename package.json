@@ -1,0 +1,40 @@
+{
+  "name": "devclean",
+  "version": "1.0.0",
+  "description": "Find and clean build artifacts, dependency folders, and cache directories across all your projects",
+  "type": "module",
+  "keywords": [
+    "cli",
+    "clean",
+    "node_modules",
+    "disk-space",
+    "build-artifacts",
+    "cache",
+    "developer-tools",
+    "terminal",
+    "cleanup"
+  ],
+  "author": "Larsen Cundric",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LarsenCundric/devclean.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "src/"
+  ],
+  "bin": {
+    "devclean": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "chalk": "5.6.2",
+    "cli-table3": "0.6.5",
+    "ora": "8.2.0"
+  }
+}
