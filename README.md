@@ -1,11 +1,11 @@
-# devclean
+# dev-purge
 
 Find and clean build artifacts, dependency folders, and cache directories across all your projects. One command to reclaim gigabytes of disk space.
 
 ## What it looks like
 
 ```
-$ devclean --dry-run
+$ dev-purge --dry-run
 
 ┌──────────────────────────────┬──────────────┬────────────────────────────┬──────────┬──────────────┐
 │ Project                      │ Framework    │ Bloat                      │ Size     │ Modified     │
@@ -28,29 +28,29 @@ $ devclean --dry-run
 ## Install
 
 ```bash
-npm install -g devclean
+npm install -g dev-purge
 ```
 
 Or run without installing:
 
 ```bash
-npx devclean
+npx dev-purge
 ```
 
 ## Usage
 
 ```bash
-devclean                         # Cycle through projects, y/n each
-devclean ~/projects              # Scan a specific directory
-devclean --dry-run               # Show bloat without deleting
-devclean -a                      # Single confirmation to delete all
-devclean -a --older-than 1y      # Nuke everything older than a year
-devclean -a --category cache --older-than 6m  # Nuke old caches
-devclean --category deps         # Only node_modules, venv, Pods, etc.
-devclean -s 100m                 # Only show bloat > 100 MB
-devclean -s 0                    # Show everything (no size minimum)
-devclean --json                  # Machine-readable JSON output
-devclean --watch                 # Real-time disk usage monitoring
+dev-purge                         # Cycle through projects, y/n each
+dev-purge ~/projects              # Scan a specific directory
+dev-purge --dry-run               # Show bloat without deleting
+dev-purge -a                      # Single confirmation to delete all
+dev-purge -a --older-than 1y      # Nuke everything older than a year
+dev-purge -a --category cache --older-than 6m  # Nuke old caches
+dev-purge --category deps         # Only node_modules, venv, Pods, etc.
+dev-purge -s 100m                 # Only show bloat > 100 MB
+dev-purge -s 0                    # Show everything (no size minimum)
+dev-purge --json                  # Machine-readable JSON output
+dev-purge --watch                 # Real-time disk usage monitoring
 ```
 
 ### Interactive mode (default)
@@ -65,25 +65,25 @@ Cycles through each project and asks y/n. Shows the project name, framework, blo
 
 ### Delete all
 
-`devclean -a` shows the full table then asks once to delete everything. Combines with filters:
+`dev-purge -a` shows the full table then asks once to delete everything. Combines with filters:
 
 ```bash
-devclean -a --older-than 6m            # everything untouched for 6 months
-devclean -a --category cache           # all cache dirs, one confirmation
-devclean -a --category deps -s 100m    # large dependency dirs only
+dev-purge -a --older-than 6m            # everything untouched for 6 months
+dev-purge -a --category cache           # all cache dirs, one confirmation
+dev-purge -a --category deps -s 100m    # large dependency dirs only
 ```
 
 ### JSON output
 
 ```bash
-devclean --json | jq '.summary'
-devclean --json | jq '.projects[] | select(.totalBytes > 1000000000)'
+dev-purge --json | jq '.summary'
+dev-purge --json | jq '.projects[] | select(.totalBytes > 1000000000)'
 ```
 
 ### Watch mode
 
 ```bash
-devclean --watch
+dev-purge --watch
 ```
 
 Refreshes every 5 seconds. Useful for monitoring disk usage during development.

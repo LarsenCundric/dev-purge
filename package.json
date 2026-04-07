@@ -1,5 +1,5 @@
 {
-  "name": "devclean",
+  "name": "dev-purge",
   "version": "1.0.0",
   "description": "Find and clean build artifacts, dependency folders, and cache directories across all your projects",
   "type": "module",
@@ -18,7 +18,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/LarsenCundric/devclean.git"
+    "url": "https://github.com/LarsenCundric/dev-purge.git"
   },
   "engines": {
     "node": ">=18"
@@ -27,7 +27,7 @@
     "src/"
   ],
   "bin": {
-    "devclean": "./src/index.js"
+    "dev-purge": "./src/index.js"
   },
   "scripts": {
     "start": "node src/index.js"

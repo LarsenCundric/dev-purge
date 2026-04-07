@@ -294,17 +294,17 @@ function parseSize(str) {
 
 function printHelp() {
   console.log(`
-${chalk.cyan.bold("devclean")} — find and clean dev bloat across your projects
+${chalk.cyan.bold("dev-purge")} — find and clean dev bloat across your projects
 
 ${chalk.white.bold("Usage:")}
-  ${chalk.green("devclean")}                         Scan + cycle through projects (y/n each)
-  ${chalk.green("devclean /path/to/projects")}       Scan a specific directory
-  ${chalk.green("devclean --dry-run")}               Show bloat without deleting
-  ${chalk.green("devclean -a, --all")}               Single confirmation to delete all
-  ${chalk.green("devclean -a --older-than 1y")}      Nuke all bloat older than a year
-  ${chalk.green("devclean --category deps")}         Only dependencies (node_modules, venv, etc.)
-  ${chalk.green("devclean --json")}                  Machine-readable JSON output
-  ${chalk.green("devclean --watch")}                 Real-time disk usage monitoring
+  ${chalk.green("dev-purge")}                         Scan + cycle through projects (y/n each)
+  ${chalk.green("dev-purge /path/to/projects")}       Scan a specific directory
+  ${chalk.green("dev-purge --dry-run")}               Show bloat without deleting
+  ${chalk.green("dev-purge -a, --all")}               Single confirmation to delete all
+  ${chalk.green("dev-purge -a --older-than 1y")}      Nuke all bloat older than a year
+  ${chalk.green("dev-purge --category deps")}         Only dependencies (node_modules, venv, etc.)
+  ${chalk.green("dev-purge --json")}                  Machine-readable JSON output
+  ${chalk.green("dev-purge --watch")}                 Real-time disk usage monitoring
 
 ${chalk.white.bold("Categories:")}
   ${chalk.yellow("deps")}    node_modules, .pnpm-store, .yarn, vendor, bower_components, Pods, venv, .venv
