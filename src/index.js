@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
+import { readFile } from "node:fs/promises";
 import chalk from "chalk";
 import ora from "ora";
 import { scan } from "./scanner.js";
@@ -35,6 +36,22 @@ function getFlagValue(name) {
   return null;
 }
 
+function getFlagValues(name) {
+  const values = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === name) {
+      if (args[i + 1] && !args[i + 1].startsWith("-")) {
+        values.push(args[i + 1]);
+        i++;
+      }
+    } else if (arg.startsWith(`${name}=`)) {
+      values.push(arg.slice(name.length + 1));
+    }
+  }
+  return values;
+}
+
 // Positional args (not flags and not flag values)
 const flagsWithValues = new Set([
   "--older-than",
@@ -43,6 +60,7 @@ const flagsWithValues = new Set([
   "-s",
   "--min-size",
   "--category",
+  "--ignore",
 ]);
 const positional = [];
 for (let i = 0; i < args.length; i++) {
@@ -79,6 +97,23 @@ const minSize = minSizeRaw !== null ? parseSize(minSizeRaw) : 1024 * 1024; // de
 const categoryRaw = getFlagValue("--category");
 const categories = categoryRaw ? new Set(categoryRaw.split(",")) : null;
 
+// Load config file for default ignore patterns
+let configIgnore = [];
+const configHome = process.env.XDG_CONFIG_HOME || `${process.env.HOME}/.config`;
+const cfgPath = resolve(configHome, "dev-purge", "config.json");
+try {
+  const raw = await readFile(cfgPath, "utf-8");
+  const cfg = JSON.parse(raw);
+  if (Array.isArray(cfg.ignore)) configIgnore = cfg.ignore;
+} catch {
+  // no config or unreadable - ignore
+}
+
+// CLI-provided ignore patterns (repeatable)
+const cliIgnore = getFlagValues("--ignore") || [];
+// Merge config + CLI (CLI entries appended, user can override by specifying patterns)
+const ignorePatterns = [...new Set([...(configIgnore || []), ...cliIgnore])];
+
 const rootPath = resolve(positional[0] || ".");
 
 // ── Main ────────────────────────────────────────────────────────────
@@ -114,6 +149,7 @@ async function run() {
     categories,
     minSize,
     includeIde,
+    ignorePatterns,
     onProgress(dir) {
       const now = Date.now();
       if (now - lastUpdate > 100) {
@@ -322,6 +358,7 @@ ${chalk.white.bold("Flags:")}
   --ide                    Also scan IDE caches (.cursor, .vscode, .idea)
   --json                   Output results as JSON
   --watch                  Continuously monitor and display disk usage
+  --ignore <glob>          Ignore matching absolute paths (repeatable). Also supported in config: ~/.config/dev-purge/config.json {"ignore": ["~/.vscode-server/**"]}
   --help, -h               Show this help
 `);
 }
