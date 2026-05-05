@@ -15,6 +15,7 @@ import {
 } from "./display.js";
 import { clean } from "./cleaner.js";
 import { ask } from "./prompt.js";
+import { manageDocker, removeContainers, removeImages } from "./docker.js";
 
 // ── Parse args ──────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -119,6 +120,12 @@ const rootPath = resolve(positional[0] || ".");
 // ── Main ────────────────────────────────────────────────────────────
 if (help) {
   printHelp();
+  process.exit(0);
+}
+
+// Docker subcommand: `dev-purge docker`
+if (positional[0] === "docker") {
+  await runDocker();
   process.exit(0);
 }
 
@@ -290,6 +297,61 @@ function printJson(results) {
     },
   };
   console.log(JSON.stringify(output, null, 2));
+}
+
+async function runDocker() {
+  const includeContainers = !hasFlag('--images-only');
+  const includeImages = !hasFlag('--containers-only');
+
+  try {
+    const report = await manageDocker({ olderThanMs, includeContainers, includeImages });
+
+    const candidatesContainers = report.containers.filter((c) => !c.keep);
+    const candidatesImages = report.images.filter((i) => !i.keep);
+
+    console.log(chalk.cyan.bold('\nDocker purge summary:'));
+    if (includeContainers) {
+      console.log(chalk.white(`  Stopped containers found: ${report.containers.length}`));
+      console.log(chalk.white(`  Candidates to remove: ${candidatesContainers.length}`));
+    }
+    if (includeImages) {
+      console.log(chalk.white(`  Dangling images found: ${report.images.length}`));
+      console.log(chalk.white(`  Candidates to remove: ${candidatesImages.length}`));
+    }
+
+    if (candidatesContainers.length === 0 && candidatesImages.length === 0) {
+      console.log(chalk.green('\nNothing to remove.'));
+      return;
+    }
+
+    if (dryRun) {
+      console.log(chalk.yellow('\n--dry-run: no resources will be removed.'));
+      return;
+    }
+
+    const answer = await ask(chalk.white('  Remove these Docker resources?'));
+    if (!answer) {
+      console.log(chalk.dim('\nCancelled.'));
+      return;
+    }
+
+    if (candidatesContainers.length > 0) {
+      const ids = candidatesContainers.map((c) => c.id);
+      const res = await removeContainers(ids);
+      console.log(chalk.green(`  Removed containers: ${res.cleaned.length}`));
+      if (res.failed.length) console.log(chalk.red(`  Failed to remove containers: ${res.failed.length}`));
+    }
+
+    if (candidatesImages.length > 0) {
+      const ids = candidatesImages.map((i) => i.id);
+      const res = await removeImages(ids);
+      console.log(chalk.green(`  Removed images: ${res.cleaned.length}`));
+      if (res.failed.length) console.log(chalk.red(`  Failed to remove images: ${res.failed.length}`));
+    }
+  } catch (err) {
+    console.error(chalk.red(`Docker purge failed: ${err.message}`));
+    process.exit(1);
+  }
 }
 
 function parseDuration(str) {
