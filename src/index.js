@@ -85,6 +85,8 @@ const watch = hasFlag("--watch");
 const help = hasFlag("--help", "-h");
 const json = hasFlag("--json");
 const includeIde = hasFlag("--ide");
+const containersOnly = hasFlag("--containers-only");
+const imagesOnly = hasFlag("--images-only");
 
 const olderThanRaw = getFlagValue("--older-than");
 const olderThanMs = olderThanRaw ? parseDuration(olderThanRaw) : null;
@@ -97,6 +99,11 @@ const minSize = minSizeRaw !== null ? parseSize(minSizeRaw) : 1024 * 1024; // de
 
 const categoryRaw = getFlagValue("--category");
 const categories = categoryRaw ? new Set(categoryRaw.split(",")) : null;
+
+const categoryIncludesContainers = categories ? categories.has("containers") : true;
+const categoryIncludesImages = categories ? categories.has("images") : true;
+const includeContainers = containersOnly ? true : imagesOnly ? false : categoryIncludesContainers;
+const includeImages = imagesOnly ? true : containersOnly ? false : categoryIncludesImages;
 
 // Load config file for default ignore patterns
 let configIgnore = [];
@@ -120,12 +127,6 @@ const rootPath = resolve(positional[0] || ".");
 // ── Main ────────────────────────────────────────────────────────────
 if (help) {
   printHelp();
-  process.exit(0);
-}
-
-// Docker subcommand: `dev-purge docker`
-if (positional[0] === "docker") {
-  await runDocker();
   process.exit(0);
 }
 
@@ -175,39 +176,47 @@ async function run() {
   }
 
   printResults(results, rootPath);
-
-  if (results.length === 0) return;
+  const runtime = await scanRuntimeTargets();
+  printRuntimeSummary(runtime);
+  const hasFsCandidates = results.length > 0;
+  const hasRuntimeCandidates =
+    runtime.candidatesContainers.length > 0 || runtime.candidatesImages.length > 0;
+  if (!hasFsCandidates && !hasRuntimeCandidates) return;
 
   if (dryRun) {
-    console.log(chalk.yellow("  --dry-run: no files were deleted.\n"));
+    console.log(chalk.yellow("  --dry-run: no resources were deleted.\n"));
     return;
   }
 
   if (cleanAll) {
-    await cleanAllWithConfirm(results);
+    await cleanAllWithConfirm(results, runtime);
   } else {
     await cycleProjects(results);
+    await cleanRuntimeWithConfirm(runtime);
   }
 }
 
-async function cleanAllWithConfirm(results) {
+async function cleanAllWithConfirm(results, runtime) {
   const allDirs = results.flatMap((p) =>
     p.bloatDirs.map((b) => ({ path: b.path, size: b.size })),
   );
   const totalSize = allDirs.reduce((a, b) => a + b.size, 0);
 
-  const answer = await ask(
-    chalk.white(
-      `  Delete ${chalk.bold(allDirs.length + " directories")} across ${chalk.bold(results.length + " projects")} (${colorSize(totalSize)})?`,
-    ),
-  );
+  if (allDirs.length > 0) {
+    const answer = await ask(
+      chalk.white(
+        `  Delete ${chalk.bold(allDirs.length + " directories")} across ${chalk.bold(results.length + " projects")} (${colorSize(totalSize)})?`,
+      ),
+    );
 
-  if (!answer) {
-    console.log(chalk.dim("\n  Cancelled.\n"));
-    return;
+    if (!answer) {
+      console.log(chalk.dim("\n  Cancelled directory cleanup.\n"));
+    } else {
+      await deleteItems(allDirs);
+    }
   }
 
-  await deleteItems(allDirs);
+  await cleanRuntimeWithConfirm(runtime);
 }
 
 async function cycleProjects(results) {
@@ -299,58 +308,80 @@ function printJson(results) {
   console.log(JSON.stringify(output, null, 2));
 }
 
-async function runDocker() {
-  const includeContainers = !hasFlag('--images-only');
-  const includeImages = !hasFlag('--containers-only');
-
+async function scanRuntimeTargets() {
+  if (!includeContainers && !includeImages) {
+    return {
+      enabled: false,
+      unavailableReason: null,
+      report: { containers: [], images: [] },
+      candidatesContainers: [],
+      candidatesImages: [],
+    };
+  }
   try {
     const report = await manageDocker({ olderThanMs, includeContainers, includeImages });
-
-    const candidatesContainers = report.containers.filter((c) => !c.keep);
-    const candidatesImages = report.images.filter((i) => !i.keep);
-
-    console.log(chalk.cyan.bold('\nDocker purge summary:'));
-    if (includeContainers) {
-      console.log(chalk.white(`  Stopped containers found: ${report.containers.length}`));
-      console.log(chalk.white(`  Candidates to remove: ${candidatesContainers.length}`));
-    }
-    if (includeImages) {
-      console.log(chalk.white(`  Dangling images found: ${report.images.length}`));
-      console.log(chalk.white(`  Candidates to remove: ${candidatesImages.length}`));
-    }
-
-    if (candidatesContainers.length === 0 && candidatesImages.length === 0) {
-      console.log(chalk.green('\nNothing to remove.'));
-      return;
-    }
-
-    if (dryRun) {
-      console.log(chalk.yellow('\n--dry-run: no resources will be removed.'));
-      return;
-    }
-
-    const answer = await ask(chalk.white('  Remove these Docker resources?'));
-    if (!answer) {
-      console.log(chalk.dim('\nCancelled.'));
-      return;
-    }
-
-    if (candidatesContainers.length > 0) {
-      const ids = candidatesContainers.map((c) => c.id);
-      const res = await removeContainers(ids);
-      console.log(chalk.green(`  Removed containers: ${res.cleaned.length}`));
-      if (res.failed.length) console.log(chalk.red(`  Failed to remove containers: ${res.failed.length}`));
-    }
-
-    if (candidatesImages.length > 0) {
-      const ids = candidatesImages.map((i) => i.id);
-      const res = await removeImages(ids);
-      console.log(chalk.green(`  Removed images: ${res.cleaned.length}`));
-      if (res.failed.length) console.log(chalk.red(`  Failed to remove images: ${res.failed.length}`));
-    }
+    return {
+      enabled: true,
+      unavailableReason: null,
+      report,
+      candidatesContainers: report.containers.filter((c) => !c.keep),
+      candidatesImages: report.images.filter((i) => !i.keep),
+    };
   } catch (err) {
-    console.error(chalk.red(`Docker purge failed: ${err.message}`));
-    process.exit(1);
+    return {
+      enabled: true,
+      unavailableReason: err.message || String(err),
+      report: { containers: [], images: [] },
+      candidatesContainers: [],
+      candidatesImages: [],
+    };
+  }
+}
+
+function printRuntimeSummary(runtime) {
+  if (!runtime.enabled) return;
+
+  console.log(chalk.cyan.bold("\nRuntime cleanup summary:"));
+  if (runtime.unavailableReason) {
+    console.log(chalk.yellow("  Containers/images unavailable in this environment."));
+    return;
+  }
+  if (includeContainers) {
+    console.log(chalk.white(`  Exited containers found: ${runtime.report.containers.length}`));
+    console.log(chalk.white(`  Candidates to remove: ${runtime.candidatesContainers.length}`));
+  }
+  if (includeImages) {
+    console.log(chalk.white(`  Dangling images found: ${runtime.report.images.length}`));
+    console.log(chalk.white(`  Candidates to remove: ${runtime.candidatesImages.length}`));
+  }
+}
+
+async function cleanRuntimeWithConfirm(runtime) {
+  if (!runtime.enabled || runtime.unavailableReason) return;
+  if (runtime.candidatesContainers.length === 0 && runtime.candidatesImages.length === 0) return;
+
+  const answer = await ask(chalk.white("  Clean container/image artifacts?"));
+  if (!answer) {
+    console.log(chalk.dim("\n  Cancelled container/image cleanup.\n"));
+    return;
+  }
+
+  if (runtime.candidatesContainers.length > 0) {
+    const ids = runtime.candidatesContainers.map((c) => c.id);
+    const res = await removeContainers(ids);
+    console.log(chalk.green(`  Removed containers: ${res.cleaned.length}`));
+    if (res.failed.length) {
+      console.log(chalk.red(`  Failed to remove containers: ${res.failed.length}`));
+    }
+  }
+
+  if (runtime.candidatesImages.length > 0) {
+    const ids = runtime.candidatesImages.map((i) => i.id);
+    const res = await removeImages(ids);
+    console.log(chalk.green(`  Removed images: ${res.cleaned.length}`));
+    if (res.failed.length) {
+      console.log(chalk.red(`  Failed to remove images: ${res.failed.length}`));
+    }
   }
 }
 
@@ -400,7 +431,9 @@ ${chalk.white.bold("Usage:")}
   ${chalk.green("dev-purge --dry-run")}               Show bloat without deleting
   ${chalk.green("dev-purge -a, --all")}               Single confirmation to delete all
   ${chalk.green("dev-purge -a --older-than 1y")}      Nuke all bloat older than a year
-  ${chalk.green("dev-purge --category deps")}         Only dependencies (node_modules, venv, etc.)
+  ${chalk.green("dev-purge --category deps")}         Only dependency folders (node_modules, venv, etc.)
+  ${chalk.green("dev-purge --category containers")}   Only exited containers
+  ${chalk.green("dev-purge --category images")}       Only dangling images
   ${chalk.green("dev-purge --json")}                  Machine-readable JSON output
   ${chalk.green("dev-purge --watch")}                 Real-time disk usage monitoring
 
@@ -409,15 +442,19 @@ ${chalk.white.bold("Categories:")}
   ${chalk.yellow("build")}   .next, .nuxt, .output, .svelte-kit, .angular, .expo, .vercel, dist, build, out, target, DerivedData
   ${chalk.yellow("cache")}   .cache, .parcel-cache, .turbo, .vite, __pycache__, .pytest_cache, .mypy_cache, .ruff_cache, .gradle, .dart_tool
   ${chalk.yellow("test")}    coverage, .nyc_output, storybook-static
+  ${chalk.yellow("containers")} exited containers
+  ${chalk.yellow("images")}  dangling images
 
 ${chalk.white.bold("Flags:")}
   --dry-run                Scan and display only, don't delete anything
   -a, --all                Delete all found bloat with single confirmation
   --older-than <dur>       Filter by project age (30d, 2w, 6m, 1y)
-  --category <cat>         Filter by category: deps, build, cache, test (comma-separated)
+  --category <cat>         Filter by category: deps, build, cache, test, containers, images (comma-separated)
   -s, --min-size <size>    Minimum bloat size to show (default: 1m, use -s 0 for all)
   -d, --depth <n>          Max scan depth (default: 6)
   --ide                    Also scan IDE caches (.cursor, .vscode, .idea)
+  --containers-only        Only include exited containers in runtime cleanup
+  --images-only            Only include dangling images in runtime cleanup
   --json                   Output results as JSON
   --watch                  Continuously monitor and display disk usage
   --ignore <glob>          Ignore matching absolute paths (repeatable). Also supported in config: ~/.config/dev-purge/config.json {"ignore": ["~/.vscode-server/**"]}

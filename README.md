@@ -47,6 +47,8 @@ dev-purge -a                      # Single confirmation to delete all
 dev-purge -a --older-than 1y      # Nuke everything older than a year
 dev-purge -a --category cache --older-than 6m  # Nuke old caches
 dev-purge --category deps         # Only node_modules, venv, Pods, etc.
+dev-purge --category containers   # Only exited containers
+dev-purge --category images       # Only dangling images
 dev-purge -s 100m                 # Only show bloat > 100 MB
 dev-purge -s 0                    # Show everything (no size minimum)
 dev-purge --json                  # Machine-readable JSON output
@@ -98,6 +100,8 @@ Filter by category with `--category`:
 | `build` | .next, .nuxt, .output, .svelte-kit, .angular, .expo, .vercel, dist, build, out, target, DerivedData |
 | `cache` | .cache, .parcel-cache, .turbo, .vite, \_\_pycache\_\_, .pytest_cache, .mypy_cache, .ruff_cache, .gradle, .dart_tool |
 | `test` | coverage, .nyc_output, storybook-static |
+| `containers` | exited containers |
+| `images` | dangling images |
 
 Multiple categories: `--category deps,build`
 
@@ -107,10 +111,12 @@ Multiple categories: `--category deps,build`
 --dry-run                Scan only, don't delete anything
 -a, --all                Delete all found bloat with single confirmation
 --older-than <dur>       Filter by project age (30d, 2w, 6m, 1y)
---category <cat>         Filter by category (comma-separated)
+--category <cat>         Filter by category: deps, build, cache, test, containers, images (comma-separated)
 -s, --min-size <size>    Minimum size to show (default: 1m, use -s 0 for all)
 -d, --depth <n>          Max scan depth (default: 6)
 --ide                    Also scan IDE caches (.cursor, .vscode, .idea)
+--containers-only        Only include exited containers in runtime cleanup
+--images-only            Only include dangling images in runtime cleanup
 --json                   Output as JSON
 --watch                  Real-time monitoring
 -h, --help               Show help
