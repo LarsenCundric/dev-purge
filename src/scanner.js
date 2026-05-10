@@ -334,6 +334,10 @@ async function walkForProjects(dir, results, opts, depth, rootPath) {
   if (opts.onProgress) opts.onProgress(dir);
 
   const isRoot = dir === rootPath;
+  // Do not report bloat at an arbitrary scan root like $HOME, but do report it
+  // when the root itself is a project (for example running `dev-purge` inside a
+  // repo with node_modules or .venv).
+  const canCollectBloatAtDir = !isRoot || (await hasProjectMarker(dir));
   const bloatEntries = [];
   const childDirs = [];
 
@@ -341,7 +345,7 @@ async function walkForProjects(dir, results, opts, depth, rootPath) {
     if (!entry.isDirectory()) continue;
     const name = entry.name;
     const fullPath = join(dir, name);
-    if (opts.targetNames.has(name) && !isRoot) {
+    if (opts.targetNames.has(name) && canCollectBloatAtDir) {
       // Skip bloat entries that themselves match ignore patterns
       if (opts.ignoreRegexes && opts.ignoreRegexes.some((re) => re.test(fullPath))) continue;
       bloatEntries.push({
