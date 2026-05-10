@@ -100,6 +100,13 @@ const minSize = minSizeRaw !== null ? parseSize(minSizeRaw) : 1024 * 1024; // de
 const categoryRaw = getFlagValue("--category");
 const categories = categoryRaw ? new Set(categoryRaw.split(",")) : null;
 
+const FILESYSTEM_CATEGORIES = new Set(["deps", "build", "cache", "test"]);
+const fsCategories = categories
+  ? new Set([...categories].filter((category) => FILESYSTEM_CATEGORIES.has(category)))
+  : null;
+const runtimeOnly = containersOnly || imagesOnly;
+const shouldScanFilesystem = !runtimeOnly && (!categories || fsCategories.size > 0);
+
 const categoryIncludesContainers = categories ? categories.has("containers") : true;
 const categoryIncludesImages = categories ? categories.has("images") : true;
 const includeContainers = containersOnly ? true : imagesOnly ? false : categoryIncludesContainers;
@@ -137,7 +144,7 @@ if (watch) {
 }
 
 async function run() {
-  const spinner = json
+  const spinner = json || !shouldScanFilesystem
     ? {
         start() {
           return this;
@@ -151,22 +158,24 @@ async function run() {
       }).start();
 
   let lastUpdate = 0;
-  const results = await scan(rootPath, {
-    olderThanMs,
-    maxDepth,
-    categories,
-    minSize,
-    includeIde,
-    ignorePatterns,
-    onProgress(dir) {
-      const now = Date.now();
-      if (now - lastUpdate > 100) {
-        lastUpdate = now;
-        const short = dir.length > 60 ? "..." + dir.slice(-57) : dir;
-        spinner.text = chalk.dim(`Scanning: ${short}`);
-      }
-    },
-  });
+  const results = shouldScanFilesystem
+    ? await scan(rootPath, {
+        olderThanMs,
+        maxDepth,
+        categories: fsCategories,
+        minSize,
+        includeIde,
+        ignorePatterns,
+        onProgress(dir) {
+          const now = Date.now();
+          if (now - lastUpdate > 100) {
+            lastUpdate = now;
+            const short = dir.length > 60 ? "..." + dir.slice(-57) : dir;
+            spinner.text = chalk.dim(`Scanning: ${short}`);
+          }
+        },
+      })
+    : [];
 
   spinner.stop();
 
@@ -175,7 +184,9 @@ async function run() {
     return;
   }
 
-  printResults(results, rootPath);
+  if (shouldScanFilesystem) {
+    printResults(results, rootPath);
+  }
   const runtime = await scanRuntimeTargets();
   printRuntimeSummary(runtime);
   const hasFsCandidates = results.length > 0;
@@ -261,13 +272,16 @@ async function runWatch() {
   printWatchHeader();
 
   const update = async () => {
-    const results = await scan(rootPath, {
-      olderThanMs,
-      maxDepth,
-      categories,
-      minSize,
-      includeIde,
-    });
+    const results = shouldScanFilesystem
+      ? await scan(rootPath, {
+          olderThanMs,
+          maxDepth,
+          categories: fsCategories,
+          minSize,
+          includeIde,
+          ignorePatterns,
+        })
+      : [];
     process.stdout.write("\x1B[2J\x1B[H");
     printWatchHeader();
     printResults(results, rootPath);
@@ -429,12 +443,14 @@ ${chalk.white.bold("Usage:")}
   ${chalk.green("dev-purge")}                         Scan + cycle through projects (y/n each)
   ${chalk.green("dev-purge /path/to/projects")}       Scan a specific directory
   ${chalk.green("dev-purge --dry-run")}               Show bloat without deleting
-  ${chalk.green("dev-purge -a, --all")}               Single confirmation to delete all
+  ${chalk.green("dev-purge -a, --all")}               Bulk-delete directories, then optionally clean runtime artifacts
   ${chalk.green("dev-purge -a --older-than 1y")}      Nuke all bloat older than a year
   ${chalk.green("dev-purge --category deps")}         Only dependency folders (node_modules, venv, etc.)
   ${chalk.green("dev-purge --category containers")}   Only exited containers
   ${chalk.green("dev-purge --category images")}       Only dangling images
-  ${chalk.green("dev-purge --json")}                  Machine-readable JSON output
+  ${chalk.green("dev-purge --containers-only")}       Runtime cleanup: exited containers only
+  ${chalk.green("dev-purge --images-only")}           Runtime cleanup: dangling images only
+  ${chalk.green("dev-purge --json")}                  Machine-readable filesystem JSON output
   ${chalk.green("dev-purge --watch")}                 Real-time disk usage monitoring
 
 ${chalk.white.bold("Categories:")}
@@ -447,7 +463,7 @@ ${chalk.white.bold("Categories:")}
 
 ${chalk.white.bold("Flags:")}
   --dry-run                Scan and display only, don't delete anything
-  -a, --all                Delete all found bloat with single confirmation
+  -a, --all                Bulk-delete found directories, then optionally clean runtime artifacts
   --older-than <dur>       Filter by project age (30d, 2w, 6m, 1y)
   --category <cat>         Filter by category: deps, build, cache, test, containers, images (comma-separated)
   -s, --min-size <size>    Minimum bloat size to show (default: 1m, use -s 0 for all)
@@ -455,7 +471,7 @@ ${chalk.white.bold("Flags:")}
   --ide                    Also scan IDE caches (.cursor, .vscode, .idea)
   --containers-only        Only include exited containers in runtime cleanup
   --images-only            Only include dangling images in runtime cleanup
-  --json                   Output results as JSON
+  --json                   Output filesystem results as JSON
   --watch                  Continuously monitor and display disk usage
   --ignore <glob>          Ignore matching absolute paths (repeatable). Also supported in config: ~/.config/dev-purge/config.json {"ignore": ["~/.vscode-server/**"]}
   --help, -h               Show this help

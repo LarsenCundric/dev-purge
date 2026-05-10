@@ -1,75 +1,131 @@
-import { exec as execCb } from "node:child_process";
+import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 
-const exec = promisify(execCb);
+const execFile = promisify(execFileCb);
+const DOCKER_TIMEOUT_MS = 15_000;
 
-async function safeExec(cmd) {
+async function docker(args) {
   try {
-    const res = await exec(cmd);
+    const res = await execFile("docker", args, {
+      timeout: DOCKER_TIMEOUT_MS,
+      maxBuffer: 10 * 1024 * 1024,
+    });
     return res.stdout || "";
   } catch (err) {
-    // Normalize errors so caller can handle missing Docker or permissions
+    // Normalize errors so caller can handle missing Docker, daemon, permissions,
+    // and timeout failures consistently.
     throw new Error(err.stderr || err.message || String(err));
   }
 }
 
-export async function manageDocker({ olderThanMs, includeContainers = true, includeImages = true } = {}) {
+function parseDockerDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isKeptByAge(created, olderThanMs) {
+  if (!olderThanMs) return false;
+  // If Docker cannot provide a parseable creation time, keep the artifact rather
+  // than deleting something that may not satisfy the user's age filter.
+  if (!created) return true;
+  return Date.now() - created.getTime() < olderThanMs;
+}
+
+function parseJsonLines(raw) {
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line)];
+      } catch {
+        return [];
+      }
+    });
+}
+
+export async function manageDocker({
+  olderThanMs,
+  includeContainers = true,
+  includeImages = true,
+} = {}) {
   const out = { containers: [], images: [] };
 
-  // List stopped/exit containers
+  // List stopped/exited containers only. Running containers are never targeted.
   if (includeContainers) {
-    const raw = await safeExec('docker ps -a --filter status=exited --format "{{json .}}"');
-    const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    for (const line of lines) {
-      try {
-        const obj = JSON.parse(line);
-        const created = new Date(obj.CreatedAt || obj.Created);
-        out.containers.push({ id: obj.ID, image: obj.Image, createdAt: obj.CreatedAt || obj.Created, created: isNaN(created.getTime()) ? null : created, keep: !!olderThanMs ? (Date.now() - created.getTime()) < olderThanMs : false });
-      } catch {
-        // ignore parse errors
-      }
+    const raw = await docker([
+      "container",
+      "ls",
+      "--all",
+      "--filter",
+      "status=exited",
+      "--format",
+      "{{json .}}",
+    ]);
+
+    for (const obj of parseJsonLines(raw)) {
+      const created = parseDockerDate(obj.CreatedAt || obj.Created);
+      out.containers.push({
+        id: obj.ID,
+        image: obj.Image,
+        name: obj.Names,
+        createdAt: obj.CreatedAt || obj.Created || null,
+        created,
+        keep: isKeptByAge(created, olderThanMs),
+      });
     }
   }
 
-  // List dangling images (safe default)
+  // List dangling images only. Tagged images are never targeted.
   if (includeImages) {
-    const raw = await safeExec('docker images --filter dangling=true --format "{{json .}}"');
-    const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    for (const line of lines) {
-      try {
-        const obj = JSON.parse(line);
-        // Some docker versions include CreatedAt, others include "CreatedSince" – best-effort
-        const created = obj.CreatedAt ? new Date(obj.CreatedAt) : null;
-        out.images.push({ id: obj.ID, repo: obj.Repository, tag: obj.Tag, createdAt: obj.CreatedAt || null, created: created, keep: !!olderThanMs ? (created ? (Date.now() - created.getTime()) < olderThanMs : true) : false });
-      } catch {
-        // ignore
-      }
+    const raw = await docker([
+      "image",
+      "ls",
+      "--filter",
+      "dangling=true",
+      "--format",
+      "{{json .}}",
+    ]);
+
+    for (const obj of parseJsonLines(raw)) {
+      const created = parseDockerDate(obj.CreatedAt);
+      out.images.push({
+        id: obj.ID,
+        repo: obj.Repository,
+        tag: obj.Tag,
+        createdAt: obj.CreatedAt || null,
+        created,
+        keep: isKeptByAge(created, olderThanMs),
+      });
     }
   }
 
   return out;
 }
 
-async function runDelete(cmd, ids) {
+async function runDelete(argsPrefix, ids) {
   const cleaned = [];
   const failed = [];
   if (ids.length === 0) return { cleaned, failed };
-  // Remove one-by-one to get per-item failures
+
+  // Remove one-by-one to get per-item failures.
   for (const id of ids) {
     try {
-      await exec(`${cmd} ${id}`);
+      await docker([...argsPrefix, id]);
       cleaned.push(id);
     } catch (err) {
-      failed.push({ id, error: err.stderr || err.message || String(err) });
+      failed.push({ id, error: err.message || String(err) });
     }
   }
   return { cleaned, failed };
 }
 
 export async function removeContainers(ids = []) {
-  return runDelete('docker rm', ids);
+  return runDelete(["container", "rm"], ids);
 }
 
 export async function removeImages(ids = []) {
-  return runDelete('docker rmi', ids);
+  return runDelete(["image", "rm"], ids);
 }
