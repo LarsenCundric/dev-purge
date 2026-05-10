@@ -51,6 +51,7 @@ dev-purge -s 100m                 # Only show bloat > 100 MB
 dev-purge -s 0                    # Show everything (no size minimum)
 dev-purge --json                  # Machine-readable JSON output
 dev-purge --watch                 # Real-time disk usage monitoring
+dev-purge --ignore node_modules   # Exclude matching paths from the scan
 ```
 
 ### Interactive mode (default)
@@ -88,6 +89,26 @@ dev-purge --watch
 
 Refreshes every 5 seconds. Useful for monitoring disk usage during development.
 
+### Ignoring folders
+
+Exclude folders from scans with repeatable `--ignore` patterns:
+
+```bash
+dev-purge --ignore node_modules           # ignore any path segment named node_modules
+dev-purge --ignore ./legacy-app           # ignore a path relative to the scan root
+dev-purge --ignore '~/Library/Caches/**'  # ignore an absolute/home-relative glob
+```
+
+You can also define defaults in `~/.config/dev-purge/config.json`:
+
+```json
+{
+  "ignore": ["~/.vscode-server/**", "./vendor"]
+}
+```
+
+Ignore patterns support absolute paths, paths relative to the scan root, bare directory names, `~`, `*`, `?`, and `**`. The same ignore rules apply in watch mode.
+
 ## Categories
 
 Filter by category with `--category`:
@@ -113,6 +134,7 @@ Multiple categories: `--category deps,build`
 --ide                    Also scan IDE caches (.cursor, .vscode, .idea)
 --json                   Output as JSON
 --watch                  Real-time monitoring
+--ignore <glob>          Ignore paths (absolute, relative to scan root, or bare dir name; repeatable)
 -h, --help               Show help
 ```
 

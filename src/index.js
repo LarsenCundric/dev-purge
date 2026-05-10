@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
+import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
 import chalk from "chalk";
 import ora from "ora";
@@ -99,7 +100,7 @@ const categories = categoryRaw ? new Set(categoryRaw.split(",")) : null;
 
 // Load config file for default ignore patterns
 let configIgnore = [];
-const configHome = process.env.XDG_CONFIG_HOME || `${process.env.HOME}/.config`;
+const configHome = process.env.XDG_CONFIG_HOME || resolve(process.env.HOME || homedir(), ".config");
 const cfgPath = resolve(configHome, "dev-purge", "config.json");
 try {
   const raw = await readFile(cfgPath, "utf-8");
@@ -251,6 +252,7 @@ async function runWatch() {
       categories,
       minSize,
       includeIde,
+      ignorePatterns,
     });
     process.stdout.write("\x1B[2J\x1B[H");
     printWatchHeader();
@@ -358,7 +360,7 @@ ${chalk.white.bold("Flags:")}
   --ide                    Also scan IDE caches (.cursor, .vscode, .idea)
   --json                   Output results as JSON
   --watch                  Continuously monitor and display disk usage
-  --ignore <glob>          Ignore matching absolute paths (repeatable). Also supported in config: ~/.config/dev-purge/config.json {"ignore": ["~/.vscode-server/**"]}
+  --ignore <glob>          Ignore paths (absolute, relative to scan root, or bare dir name; repeatable). Also supported in config: ~/.config/dev-purge/config.json {"ignore": ["~/.vscode-server/**"]}
   --help, -h               Show this help
 `);
 }
