@@ -182,7 +182,21 @@ async function getLastModified(dirPath) {
  *   categories        - Set of categories to include (null = all)
  *   minSize           - minimum bloat size in bytes to include
  *   includeIde        - also scan for IDE cache dirs
+ *   ignorePatterns    - array of glob patterns to ignore (absolute paths, supports ~ and **)
  */
+
+function globToRegExp(glob) {
+  const home = process.env.HOME || "";
+  // expand leading ~
+  let g = glob.replace(/^~(?=$|\/)/, home);
+  // ensure slashes are normalized (we operate on posix-style paths from join)
+  // escape regex special chars
+  const escaped = g.replace(/([.+^${}()|[\]\\])/g, "\\$1");
+  // convert globstars and stars
+  const withStars = escaped.replace(/\\\*\\\*/g, ".*").replace(/\\\*/g, "[^/]*");
+  return new RegExp(`^${withStars}$`);
+}
+
 export async function scan(rootPath, opts = {}) {
   const {
     onProgress,
@@ -191,6 +205,7 @@ export async function scan(rootPath, opts = {}) {
     categories,
     minSize = 0,
     includeIde = false,
+    ignorePatterns = [],
   } = opts;
 
   // Build the lookup of dir names to scan for
@@ -207,6 +222,9 @@ export async function scan(rootPath, opts = {}) {
   }
   const targetNames = new Set(Object.keys(targetDirs));
 
+  // prepare ignore regexes
+  const ignoreRegexes = (ignorePatterns || []).map((p) => globToRegExp(p));
+
   const results = [];
   await walkForProjects(
     rootPath,
@@ -217,6 +235,7 @@ export async function scan(rootPath, opts = {}) {
       maxDepth,
       targetNames,
       minSize,
+      ignoreRegexes,
     },
     0,
     rootPath,
@@ -302,6 +321,9 @@ async function hasProjectMarker(dir) {
 async function walkForProjects(dir, results, opts, depth, rootPath) {
   if (depth > opts.maxDepth) return;
 
+  // If this directory matches an ignore pattern, skip entirely
+  if (opts.ignoreRegexes && opts.ignoreRegexes.some((re) => re.test(dir))) return;
+
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -312,20 +334,27 @@ async function walkForProjects(dir, results, opts, depth, rootPath) {
   if (opts.onProgress) opts.onProgress(dir);
 
   const isRoot = dir === rootPath;
+  // Do not report bloat at an arbitrary scan root like $HOME, but do report it
+  // when the root itself is a project (for example running `dev-purge` inside a
+  // repo with node_modules or .venv).
+  const canCollectBloatAtDir = !isRoot || (await hasProjectMarker(dir));
   const bloatEntries = [];
   const childDirs = [];
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const name = entry.name;
-    if (opts.targetNames.has(name) && !isRoot) {
+    const fullPath = join(dir, name);
+    if (opts.targetNames.has(name) && canCollectBloatAtDir) {
+      // Skip bloat entries that themselves match ignore patterns
+      if (opts.ignoreRegexes && opts.ignoreRegexes.some((re) => re.test(fullPath))) continue;
       bloatEntries.push({
         name,
-        path: join(dir, name),
+        path: fullPath,
         category: BLOAT[name] || IDE_DIRS[name] || "other",
       });
     } else if (!SKIP_DIRS.has(name) && !name.startsWith(".Trash")) {
-      childDirs.push(join(dir, name));
+      childDirs.push(fullPath);
     }
   }
 
