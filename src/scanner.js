@@ -1,5 +1,6 @@
 import { readdir, stat, access, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 
 // ── Bloat directory definitions with categories ─────────────────────
 export const BLOAT = {
@@ -182,7 +183,111 @@ async function getLastModified(dirPath) {
  *   categories        - Set of categories to include (null = all)
  *   minSize           - minimum bloat size in bytes to include
  *   includeIde        - also scan for IDE cache dirs
+ *   ignorePatterns    - array of glob patterns to ignore; supports absolute
+ *                       paths, paths relative to rootPath, bare dir names,
+ *                       ~, *, ?, and **
  */
+
+function normalizePathForMatch(path) {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/g, "");
+  return normalized || "/";
+}
+
+function expandHome(pattern) {
+  const home = process.env.HOME || homedir();
+  return pattern.replace(/^~(?=$|[\\/])/, home);
+}
+
+function hasGlobMagic(pattern) {
+  return /[*?]/.test(pattern);
+}
+
+function isAbsolutePattern(pattern) {
+  return isAbsolute(pattern) || /^[A-Za-z]:[\\/]/.test(pattern);
+}
+
+function escapeRegExpChar(char) {
+  return char.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+}
+
+function globToRegExp(glob) {
+  const pattern = normalizePathForMatch(glob);
+  let source = "";
+
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i];
+
+    if (char === "*") {
+      if (pattern[i + 1] === "*") {
+        i++;
+        if (pattern[i + 1] === "/") {
+          i++;
+          source += "(?:.*/)?";
+        } else {
+          source += ".*";
+        }
+      } else {
+        source += "[^/]*";
+      }
+    } else if (char === "?") {
+      source += "[^/]";
+    } else {
+      source += escapeRegExpChar(char);
+    }
+  }
+
+  return new RegExp(`^${source}$`);
+}
+
+function compileIgnorePattern(rawPattern, rootPath) {
+  if (typeof rawPattern !== "string") return null;
+
+  const raw = rawPattern.trim();
+  if (!raw) return null;
+
+  const expanded = expandHome(raw);
+  const hasSlash = /[\\/]/.test(expanded);
+  const hasMagic = hasGlobMagic(expanded);
+
+  if (!hasSlash && !hasMagic) {
+    return (candidatePath) =>
+      normalizePathForMatch(candidatePath).split("/").includes(expanded);
+  }
+
+  let absolutePattern;
+  if (isAbsolutePattern(expanded)) {
+    absolutePattern = expanded;
+  } else if (!hasSlash) {
+    absolutePattern = join(rootPath, "**", expanded);
+  } else {
+    absolutePattern = resolve(rootPath, expanded);
+  }
+
+  const normalizedPattern = normalizePathForMatch(absolutePattern);
+
+  if (!hasMagic) {
+    return (candidatePath) => {
+      const normalizedCandidate = normalizePathForMatch(candidatePath);
+      return (
+        normalizedCandidate === normalizedPattern ||
+        normalizedCandidate.startsWith(`${normalizedPattern}/`)
+      );
+    };
+  }
+
+  const regex = globToRegExp(normalizedPattern);
+  const baseRegex = normalizedPattern.endsWith("/**")
+    ? globToRegExp(normalizedPattern.slice(0, -3))
+    : null;
+
+  return (candidatePath) => {
+    const normalizedCandidate = normalizePathForMatch(candidatePath);
+    return (
+      regex.test(normalizedCandidate) || !!baseRegex?.test(normalizedCandidate)
+    );
+  };
+}
+
 export async function scan(rootPath, opts = {}) {
   const {
     onProgress,
@@ -191,7 +296,10 @@ export async function scan(rootPath, opts = {}) {
     categories,
     minSize = 0,
     includeIde = false,
+    ignorePatterns = [],
   } = opts;
+
+  const scanRootPath = resolve(rootPath);
 
   // Build the lookup of dir names to scan for
   const targetDirs = {};
@@ -207,9 +315,17 @@ export async function scan(rootPath, opts = {}) {
   }
   const targetNames = new Set(Object.keys(targetDirs));
 
+  // Prepare ignore matchers after rootPath is known so relative patterns can be
+  // resolved from the scan root.
+  const ignoreMatchers = (ignorePatterns || [])
+    .map((pattern) => compileIgnorePattern(pattern, scanRootPath))
+    .filter(Boolean);
+  const isIgnored = (candidatePath) =>
+    ignoreMatchers.some((matcher) => matcher(candidatePath));
+
   const results = [];
   await walkForProjects(
-    rootPath,
+    scanRootPath,
     results,
     {
       onProgress,
@@ -217,9 +333,10 @@ export async function scan(rootPath, opts = {}) {
       maxDepth,
       targetNames,
       minSize,
+      isIgnored,
     },
     0,
-    rootPath,
+    scanRootPath,
   );
 
   results.sort((a, b) => b.totalSize - a.totalSize);
@@ -302,6 +419,9 @@ async function hasProjectMarker(dir) {
 async function walkForProjects(dir, results, opts, depth, rootPath) {
   if (depth > opts.maxDepth) return;
 
+  // If this directory matches an ignore pattern, skip entirely.
+  if (opts.isIgnored?.(dir)) return;
+
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -312,20 +432,27 @@ async function walkForProjects(dir, results, opts, depth, rootPath) {
   if (opts.onProgress) opts.onProgress(dir);
 
   const isRoot = dir === rootPath;
+  // Do not report bloat at an arbitrary scan root like $HOME, but do report it
+  // when the root itself is a project (for example running `dev-purge` inside a
+  // repo with node_modules or .venv).
+  const canCollectBloatAtDir = !isRoot || (await hasProjectMarker(dir));
   const bloatEntries = [];
   const childDirs = [];
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const name = entry.name;
-    if (opts.targetNames.has(name) && !isRoot) {
+    const fullPath = join(dir, name);
+    if (opts.isIgnored?.(fullPath)) continue;
+
+    if (opts.targetNames.has(name) && canCollectBloatAtDir) {
       bloatEntries.push({
         name,
-        path: join(dir, name),
+        path: fullPath,
         category: BLOAT[name] || IDE_DIRS[name] || "other",
       });
     } else if (!SKIP_DIRS.has(name) && !name.startsWith(".Trash")) {
-      childDirs.push(join(dir, name));
+      childDirs.push(fullPath);
     }
   }
 
